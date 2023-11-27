@@ -10,8 +10,10 @@ LDFLAGS 		= 	$(DEBUGFLAGS) --js-library library.js \
 					-s USE_FREETYPE=1 \
 					-s USE_ICU=1 \
 					-s USE_LIBPNG=1 \
-					--pre-js pre.js \
+					--post-js ../post.js \
 					-s EXPORTED_FUNCTIONS='["_compileBibtex", "_compileLaTeX", "_compileFormat", "_main", "_setMainEntry"]' -s NO_EXIT_RUNTIME=1 \
+					-s EXPORT_ES6=1 -s MODULARIZE=1 \
+					-s EXPORT_NAME=Xetex \
 					-s WASM=1 -s EXPORTED_RUNTIME_METHODS=["cwrap"] -s ALLOW_MEMORY_GROWTH=1
 
 LINKFLAG 		= 	$(CXX) -o $@ $(LDFLAGS)
