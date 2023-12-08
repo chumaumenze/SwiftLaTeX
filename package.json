@@ -1,0 +1,30 @@
+{
+  "name": "swiftlatex",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "build": "make && rollup -c",
+    "make:pdftex": "make pdftex.wasm",
+    "make:xetex": "make xetex.wasm",
+    "make:dvipdfm": "make dvipdfm.wasm",
+    "clean": "make fclean && rm -rf dist/",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/pluginutils": "^5.1.0",
+    "@types/emscripten": "^1.39.9",
+    "@types/node": "^20.9.4",
+    "esbuild": "^0.19.8",
+    "rollup": "^4.6.0",
+    "rollup-plugin-copy": "^3.5.0",
+    "rollup-plugin-dts": "^6.1.0",
+    "rollup-plugin-esbuild": "^6.1.0",
+    "typescript": "^5.3.2"
+  }
+}

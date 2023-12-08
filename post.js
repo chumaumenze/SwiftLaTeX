@@ -1,54 +1,113 @@
-function print(a) {
-    Module.memlog += (a + "\n");
-    console.log(a)
+const engine = {
+    PDFTEX: 0,
+    XETEX: 1,
+    DVIPDF: 2
 }
 
-function printErr(a) {
-    Module.memErrlog += (a + "\n");
-    console.error(a);
-}
 
+/**
+ * @param {ArrayLike<number>} content
+ * @return {number}
+ */
 function _allocate(content) {
     let res = _malloc(content.length);
     HEAPU8.set(new Uint8Array(content), res);
     return res;
 }
 
-function dumpHeapMemory() {
-    var src = wasmMemory.buffer;
-    var dst = new Uint8Array(src.byteLength);
-    dst.set(new Uint8Array(src));
-    // console.log("Dumping " + src.byteLength);
-    return dst;
-}
-
-function restoreHeapMemory() {
-    if (Module.initMem) {
-        var dst = new Uint8Array(wasmMemory.buffer);
-        dst.set(Module.initmem);
-    }
-}
-
-function closeFSStreams() {
-    for (var i = 0; i < FS.streams.length; i++) {
-        var stream = FS.streams[i];
-        if (!stream || stream.fd <= 2) {
-            continue;
-        }
-        FS.close(stream);
-    }
-}
-
 function prepareExecutionContext() {
     Module.memLog = '';
     Module.memErrLog = '';
-    restoreHeapMemory();
-    closeFSStreams();
+
+    // // restore heap memory
+    // if (Module.initMem) {
+    //     wasmMemory.buffer = new Uint8Array(Module.initMem.byteLength);
+    //     wasmMemory.buffer.set(Module.initmem);
+    // }
+
+    FS.streams.forEach((stream) => {
+        if (!stream || stream.fd <= 2) {
+            return
+        }
+        FS.close(stream);
+    })
     FS.chdir(Module.workRoot);
 }
 
+/**
+ *
+ * @param {number} engineType
+ * @param {string} target
+ * @return {{err?: Error, log: string, errLog: string, data?: Uint8Array}}
+ */
+function makeLatex(engineType, target) {
+    prepareExecutionContext();
 
-Module['onRuntimeInitialized'] = function () {
+    const setMainFunction = cwrap('setMainEntry', 'number', ['string']);
+    setMainFunction(Module.mainFile)
+
+
+    let compile = _compileLaTeX;
+    if (engineType === engine.DVIPDF) {
+        compile = _compilePDF
+    }
+
+    let status = compile();
+    if (status !== 0) {
+        const err = Error("Compilation failed, with status code " + status);
+        return {err, log: Module.memLog, errLog: Module.memErrLog}
+    }
+
+    try {
+        _compileBibtex();
+    } catch (err) {
+        console.error("Ignoring bibtex exceptions", err)
+    }
+
+    let data;
+    let pdfurl = Module.workRoot + target;
+    try {
+        data = FS.readFile(pdfurl, {encoding: 'binary'});
+    } catch (err) {
+        err = err + "\nFetch content failed. " + pdfurl;
+        console.error(err);
+        return {err, log: Module.memLog, errLog: Module.memErrLog}
+    }
+
+    return {data, log: Module.memLog, errLog: Module.memErrLog}
+}
+
+
+/**
+ *
+ * @param {string} fileName
+ * @return {{err?: Error, log: string, errLog: string, data?: Uint8Array}}
+ */
+function makeFormat(fileName) {
+    prepareExecutionContext();
+
+    let status = _compileFormat();
+    if (status !== 0) {
+        const err = Error("Compilation failed, with status code " + status);
+        console.error(err)
+        return {err, log: Module.memLog, errLog: Module.memErrLog}
+    }
+
+    let data;
+    let pdfurl = Module.workRoot + fileName;
+    try {
+        data = FS.readFile(pdfurl, {encoding: 'binary'});
+    } catch (err) {
+        err = Error(err + "\nFetch content failed. " + pdfurl);
+        console.error(err);
+        return {err, log: Module.memLog, errLog: Module.memErrLog}
+    }
+
+    return {data, log: Module.memLog, errLog: Module.memErrLog}
+}
+
+
+Module.onRuntimeInitialized = function () {
     Module.cacheRoot = "/tex";
     Module.workRoot = "/work";
     Module.memLog = "";
@@ -57,83 +116,97 @@ Module['onRuntimeInitialized'] = function () {
     Module.mainFile = "";
     Module.texliveURL = "https://texlive2.swiftlatex.com/";
 
-    Module.print = print;
-    Module.printErr = printErr;
-    Module.preRun = function () {
+    Module.print = function (a) {
+        Module.memLog += (a + "\n");
+        console.log(a)
+    };
+    Module.printErr = function (a) {
+        Module.memErrLog += (a + "\n");
+        console.error(a);
+    };
+    Module.preRun.push(function () {
         FS.mkdir(Module.cacheRoot);
         FS.mkdir(Module.workRoot);
-    };
-    Module.postRun = function () {
-        Module.initMem = dumpHeapMemory();
-    };
+    });
+
+    // Module.postRun = function () {
+    //     const src = wasmMemory.buffer;
+    //     Module.initMem = new Uint8Array(src.byteLength);
+    //     Module.initMem.set(new Uint8Array(src));
+    // };
+
     Module.onAbort = function () {
-        Module.memErrlog += 'Engine crashed\n';
+        Module.memErrLog += 'Engine crashed\n';
     };
 
-    Module.writeFile = function (filename, content) {
-        filename = Module.workRoot + "/" + filename
-        FS.writeFile(filename, content)
+
+    // Module.locateFile = function (path, scriptDirectory) {
+    //     // The __WASM_BINARY__ variable does not exist.
+    //     // Rollup will substitute it with the appropriate binary name.
+    //     // const _wasmURL = require(__SWIFTLATEX_WASM_BINARY__);
+    //     const _wasmURL = require("./swiftlatexpdftex.wasm");
+    //     if (path === wasmBinaryFile) {
+    //         return new URL(_wasmURL, import.meta.url).href
+    //     }
+    //     return scriptDirectory + path
+    // }
+
+    Module.writeFile = function (filePath, content) {
+        try {
+            if (!filePath.startsWith("/")) filePath = "/" + filePath
+            FS.writeFile(Module.workRoot + filePath, content)
+        } catch (err) {
+            return {err}
+        }
+        return {}
+    }
+
+    Module.setMainFile = function (/** @type {string} */ filePath) {
+        if (!filePath.startsWith("/")) filePath = "/" + filePath
+        filePath = Module.workRoot + filePath
+        // @ts-expect-error
+        let detail = FS.analyzePath(filePath, false)
+        if (detail.exists && FS.isFile(FS.stat(filePath).mode)) {
+            Module.mainFile = filePath
+        } else {
+            let msg = "Path must be an existing file."
+            if (detail.error && detail.error.message) msg += " " + detail.error.message
+            return {err: Error(msg)}
+        }
+        return {}
     }
 
     Module.flushCache = function () {
-        FS.unlink(Module.workRoot);
-        FS.mkdir(Module.workRoot);
+        try {
+            FS.unlink(Module.workRoot);
+            FS.mkdir(Module.workRoot);
+        } catch (err) {
+            return {err}
+        }
+        return {}
     }
 
-    function makeFormat(fileName) {
-        prepareExecutionContext();
-
-        let status = _compileFormat();
-        if (status !== 0) {
-            const err = Error("Compilation failed, with status code " + status);
-            console.error(err)
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
-        }
-
-        let data;
-        let pdfurl = Module.workRoot + fileName;
+    Module.mkdir = function (/** @type {string} */ dirname) {
         try {
-            data = FS.readFile(pdfurl, {encoding: 'binary'});
+            FS.mkdir(Module.workRoot + "/" + dirname)
         } catch (err) {
-            err = err + "\nFetch content failed. " + pdfurl;
-            console.error(err);
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
+            return {err}
         }
-
-        return {data, log: Module.memLog, errLog: Module.memErrLog}
+        return {}
     }
 
-    function makeLatex(target) {
-        prepareExecutionContext();
-
-        const setMainFunction = cwrap('setMainEntry', 'number', ['string']);
-        setMainFunction(Module.mainfile)
-
-        let status = _compileLaTeX();
-        if (status !== 0) {
-            const err = Error("Compilation failed, with status code " + status);
-            console.error(err)
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
+    Module.setTexliveURL = function (/** @type {string} */ url) {
+        if (typeof url !== "string") {
+            return {err: Error("Texlive URL must be a string value")}
         }
-
-        _compileBibtex();
-
-        let data;
-        let pdfurl = Module.workRoot + target;
-        try {
-            data = FS.readFile(pdfurl, {encoding: 'binary'});
-        } catch (err) {
-            err = err + "\nFetch content failed. " + pdfurl;
-            console.error(err);
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
-        }
-
-        return {data, log: Module.memLog, errLog: Module.memErrLog}
+        if (!url.endsWith("/")) url += "/";
+        Module.texliveURL = url
+        return {url}
     }
 
     Module.compileXetex = function () {
-        const target = "/" + Module.mainfile.substring(0, Module.mainfile.length - 4) + ".xdv";
-        return makeLatex(target)
+        const target = "/" + Module.mainFile.substring(0, Module.mainFile.length - 4) + ".xdv";
+        return makeLatex(engine.XETEX, target)
     }
 
     Module.compileXetexFormat = function () {
@@ -141,34 +214,13 @@ Module['onRuntimeInitialized'] = function () {
     }
 
     Module.compileDviPDF = function () {
-        prepareExecutionContext();
-
-        const setMainFunction = cwrap('setMainEntry', 'number', ['string']);
-        setMainFunction(Module.mainfile)
-
-        let status = _compilePDF();
-        if (status !== 0) {
-            const err = Error("Compilation failed, with status code " + status);
-            console.error(err)
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
-        }
-
-        let data;
-        let pdfurl = Module.workRoot + "/" + Module.mainfile.substring(0, Module.mainfile.length - 4) + ".pdf";
-        try {
-            data = FS.readFile(pdfurl, {encoding: 'binary'});
-        } catch (err) {
-            err = err + "\nFetch content failed. " + pdfurl;
-            console.error(err);
-            return {err, log: Module.memLog, errLog: Module.memErrLog}
-        }
-
-        return {data, log: Module.memLog, errLog: Module.memErrLog}
+        const target = "/" + Module.mainFile.substring(0, Module.mainFile.length - 4) + ".pdf";
+        return makeLatex(engine.DVIPDF, target)
     }
 
     Module.compilePDFTex = function () {
-        const target = "/" + self.mainfile.substring(0, self.mainfile.length - 4) + ".pdf";
-        return makeLatex(target)
+        const target = "/" + Module.mainFile.substring(0, Module.mainFile.length - 4) + ".pdf";
+        return makeLatex(engine.PDFTEX, target)
     }
     Module.compilePDFTexFormat = function () {
         return makeFormat("/pdflatex.fmt")
@@ -194,60 +246,19 @@ if (ENVIRONMENT_IS_WORKER) {
                 self.postMessage({...Module.compilePDFTex(), cmd});
                 break;
             case "setTexliveURL":
-                if (typeof data.url !== "string") {
-                    self.postMessage({
-                        err: Error("Texlive URL must be a string value"),
-                        cmd
-                    })
-                    break;
-                }
-                if (!data.endsWith("/")) data.url += "/";
-                Module.texliveURL = data.url
-                self.postMessage({url: data.url, cmd})
+                self.postMessage({...Module.setTexliveURL(data.url), cmd})
                 break
             case "fsMkdir":
-                let dirname = data.url;
-                try {
-                    FS.mkdir(Module.workRoot + "/" + dirname)
-                    self.postMessage({cmd});
-                } catch (err) {
-                    self.postMessage({err, cmd});
-                }
+                self.postMessage({...Module.mkdir(data.dirname), cmd});
                 break;
             case "fsWrite":
-                let filePath = data.url, contents = data.src;
-                if (!filePath.startsWith("/")) filePath = "/" + filePath
-                try {
-                    FS.writeFile(Module.workRoot + filePath, contents)
-                    self.postMessage({cmd});
-                } catch (err) {
-                    self.postMessage({err, cmd});
-                }
+                self.postMessage({...Module.writeFile(data.filePath, data.content), cmd});
                 break;
             case "setMainFile":
-                let name = data.url;
-                if (!name.startsWith("/")) name = "/" + name
-                name = Module.workRoot + name
-                let detail = FS.analyzePath(name, false)
-                if (detail.exists && FS.isFile(FS.stat(name).mode)) {
-                    Module.mainFile = name
-                    self.postMessage({cmd})
-                } else {
-                    let msg = "Path must be an existing file."
-                    if (detail.error && detail.error.message) msg += " " + detail.error.message
-                    self.postMessage({
-                        err: Error(msg),
-                        cmd
-                    })
-                }
+                self.postMessage({...Module.setMainFile(data.filePath), cmd})
                 break;
             case "flushCache":
-                try {
-                    Module.flushCache()
-                    self.postMessage({cmd})
-                } catch (err) {
-                    self.postMessage({err, cmd})
-                }
+                self.postMessage({...Module.flushCache(), cmd})
                 break;
             default:
                 self.postMessage({
@@ -259,9 +270,14 @@ if (ENVIRONMENT_IS_WORKER) {
 }
 
 
-let texlive404Cache = {};
-let texlive200Cache = {};
+let texlive404Cache = /** @type {{[key: string]: number}} */ {};
+let texlive200Cache = /** @type {{[key: string]: string}} */ {};
 
+/**
+ * @param {number} nameptr - A pointer to a null-terminated UTF8-encoded string in the Emscripten HEAP.
+ * @param {number} format - An integer from an enum representing to representing the file format
+ * @param {number | boolean} _mustexist
+ */
 function kpse_find_file_impl(nameptr, format, _mustexist) {
 
     let reqname = UTF8ToString(nameptr);
@@ -317,9 +333,13 @@ function kpse_find_file_impl(nameptr, format, _mustexist) {
     return 0;
 }
 
-let font200Cache = {};
-let font404Cache = {};
+let font200Cache = /** @type {{[key: string]: number}} */ {};
+let font404Cache = /** @type {{[key: string]: string}} */ {};
 
+/**
+ * @param {number} fontnamePtr
+ * @param {number} varStringPtr
+ */
 function fontconfig_search_font_impl(fontnamePtr, varStringPtr) {
     const fontname = UTF8ToString(fontnamePtr);
     let variant = UTF8ToString(varStringPtr);
@@ -369,9 +389,15 @@ function fontconfig_search_font_impl(fontnamePtr, varStringPtr) {
     return 0;
 }
 
-let pk404_cache = {};
-let pk200_cache = {};
 
+let pk404_cache = /** @type {{[key: string]: number}} */ {};
+let pk200_cache = /** @type {{[key: string]: string}} */ {};
+
+
+/**
+ * @param {number} nameptr
+ * @param {number} dpi
+ */
 function kpse_find_pk_impl(nameptr, dpi) {
     const reqname = UTF8ToString(nameptr);
 

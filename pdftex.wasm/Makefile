@@ -55,8 +55,10 @@ _default:
 all: $(PROJECT_NAME)
 
 $(PROJECT_NAME): $(HEADERS) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS)
-	@$(CXX_LINK) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS) xpdf/xpdf.a  --js-library library.js  --pre-js pre.js \
+	@$(CXX_LINK) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS) xpdf/xpdf.a  --js-library library.js  --post-js ../post.js \
 	-s EXPORTED_FUNCTIONS='["_compileBibtex", "_compileLaTeX", "_compileFormat", "_main", "_setMainEntry"]' \
+	-s EXPORT_ES6=1 -s MODULARIZE=1 \
+	-s EXPORT_NAME=PDFTex \
 	-s EXPORTED_RUNTIME_METHODS=["cwrap"] -s NO_EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 && \
 	echo -e "\033[32m[DONE]\033[0m $(PROJECT_NAME)" || \
 	echo -e "\033[31m[ERROR]\033[0m $(PROJECT_NAME)"
