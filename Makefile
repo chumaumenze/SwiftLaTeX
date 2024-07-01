@@ -27,5 +27,12 @@ fclean:
 
 re: fclean all
 
-.PHONY: all clean fclean re $(SUBDIRS)
+# emsdk:
+# 	@pushd ~/emsdk && \
+# 	./emsdk install 3.1.54 && \
+# 	./emsdk activate 3.1.54 && \
+# 	source ./emsdk_env.sh && \
+# 	popd
+
+.PHONY: all clean fclean re $(SUBDIRS) emsdk
 .SILENT: all clean fclean re $(SUBDIRS)

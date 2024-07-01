@@ -8,3 +8,8 @@ swiftlatexdvipdfm.wasm
 *.Identifier
 .texlive_tmp
 .DS_Store
+.idea/
+.cache/
+.vscode/
+compile_commands.json
+node_modules/
